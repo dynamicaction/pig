@@ -1,0 +1,678 @@
+#
+# Patch with changes to Pig 0.13.0 to fix the following:
+# - Bug in in-memory aggregation causing map-side agg to not be used in many cases (fixed by custom change) [Opened PIG-4001]
+# - Excessive logging in POPartialAgg 
+# - Out of memory in combiner with large data sets (applied patch PIG-2829.separate.options.patch to allow combiner to be disabled) [Opened PIG-4002]
+# - NOT ADDED TO 0.13.0 PENDING VERIFICATION OF NEED: UDFContext not read in PigCombiner (custom change to PigCombiner) [Need to determine if still needed]
+# - Sporadic errors when instantiating PigStorage (custom fix) (submitted PIG-3988)
+# - Schema cache in JsonMetadata. Speeds up parsing immensely. This works for us because files don't change during a run, but probably not universally applicable, so no patch submitted.
+# - Fix for error when unioning inputs with different schemas (custom Change to LogicalPlan) [Opened PIG-4018]
+# - Fix for overactive spills with MultiQueryPackager (customChange to MultiQueryOptimizer - failed to set numInputs on packager)
+#
+# Useful commands:
+#     Build all: ant
+#     Create eclipse files: ant eclipse-files
+#     Create source jar: ant source-jar
+#     Install locally: mvn install:install-file -Dfile=build/pig-ecm-0.13.0-SNAPSHOT.jar -Dsources=build/pig-ecm-0.13.0-SNAPSHOT-sources.jar -DartifactId=pig-ecm -DgroupId=org.apache.pig -Dversion=0.13.0-SNAPSHOT -Dpackaging=jar -DpomFle=pom.xml
+#     Deploy to repo:  mvn deploy:deploy-file -Dfile=build/pig-ecm-0.13.0-SNAPSHOT.jar -DartifactId=pig-ecm -DgroupId=org.apache.pig -Dversion=0.13.0-SNAPSHOT -Dpackaging=jar -DpomFile=pom.xml -Dsources=build/pig-ecm-0.13.0-SNAPSHOT-sources.jar -DrepositoryId=itrader-snapshots -Durl=http://build1.dev1.dynamicaction.com:8081/archiva/repository/snapshots/
+#     
+#
+Index: src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/MapReduceLauncher.java
+===================================================================
+--- src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/MapReduceLauncher.java (revision 1608863)
++++ src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/MapReduceLauncher.java (working copy)
+@@ -53,6 +53,7 @@
+ import org.apache.pig.backend.hadoop.executionengine.JobCreationException;
+ import org.apache.pig.backend.hadoop.executionengine.Launcher;
+ import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MRCompiler.LastInputStreamingOptimizer;
++import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.CombinerPlanRemover;
+ import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.DotMRPrinter;
+ import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.EndOfAllInputSetter;
+ import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.MRIntermediateDataVisitor;
+@@ -641,11 +642,18 @@
+         String lastInputChunkSize =
+                 pc.getProperties().getProperty(
+                         "last.input.chunksize", JoinPackager.DEFAULT_CHUNK_SIZE);
+-
+-        String prop = pc.getProperties().getProperty(PigConfiguration.PROP_NO_COMBINER);
+-        if (!pc.inIllustrator && !("true".equals(prop)))  {
+-            boolean doMapAgg =
+-                    Boolean.valueOf(pc.getProperties().getProperty(PigConfiguration.PROP_EXEC_MAP_PARTAGG,"false"));
++        
++       boolean doMapAgg =
++                Boolean.valueOf(pc.getProperties().getProperty(PigConfiguration.PROP_EXEC_MAP_PARTAGG,"false"));
++        boolean doCombiner = 
++                !Boolean.valueOf(pc.getProperties().getProperty(PigConfiguration.PROP_NO_COMBINER,
++                        // Default to no combiner when doMapAgg is true
++                        String.valueOf(doMapAgg))); 
++        
++        // If doMapAgg is true, add the combiner even if it was disabled, since
++        // CombinerOptimizer actually adds the POPartialAgg plan. We'll remove 
++        // the combine plan later.
++        if (!pc.inIllustrator && (doCombiner || doMapAgg))  {
+             CombinerOptimizer co = new CombinerOptimizer(plan, doMapAgg);
+             co.visit();
+             //display the warning message(s) from the CombinerOptimizer
+@@ -664,7 +672,7 @@
+             la.adjust();
+         }
+         // Optimize to use secondary sort key if possible
+-        prop = pc.getProperties().getProperty("pig.exec.nosecondarykey");
++        String prop = pc.getProperties().getProperty("pig.exec.nosecondarykey");
+         if (!pc.inIllustrator && !("true".equals(prop)))  {
+             SecondaryKeyOptimizer skOptimizer = new SecondaryKeyOptimizer(plan);
+             skOptimizer.visit();
+@@ -673,7 +681,14 @@
+         // optimize key - value handling in package
+         POPackageAnnotator pkgAnnotator = new POPackageAnnotator(plan);
+         pkgAnnotator.visit();
+-
++        
++        // now we can remove the combiner plan if we don't really need it.
++        // note the combiner plan is needed by POPackageAnnotator
++        if (!doCombiner){
++            CombinerPlanRemover remover = new CombinerPlanRemover(plan);
++            remover.visit();
++        }
++        
+         // optimize joins
+         LastInputStreamingOptimizer liso =
+                 new MRCompiler.LastInputStreamingOptimizer(plan, lastInputChunkSize);
+Index: src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/MultiQueryOptimizer.java
+===================================================================
+--- src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/MultiQueryOptimizer.java   (revision 1608863)
++++ src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/MultiQueryOptimizer.java   (working copy)
+@@ -1203,6 +1203,7 @@
+         MultiQueryPackager pkgr = new MultiQueryPackager();
+         pkgr.setInCombiner(inCombiner);
+         pkgr.setSameMapKeyType(sameMapKeyType);
++        pkgr.setNumInputs(pkg.getNumInps());
+         pkg.setPkgr(pkgr);
+         return pkg;
+     }   
+Index: src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/plans/CombinerPlanRemover.java
+===================================================================
+--- src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/plans/CombinerPlanRemover.java (revision 0)
++++ src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/plans/CombinerPlanRemover.java (working copy)
+@@ -0,0 +1,21 @@
++package org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans;
++
++import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MapReduceOper;
++import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhysicalPlan;
++import org.apache.pig.impl.plan.DepthFirstWalker;
++import org.apache.pig.impl.plan.VisitorException;
++
++public class CombinerPlanRemover extends MROpPlanVisitor {
++
++    public CombinerPlanRemover(MROperPlan plan) {
++        super(plan, new DepthFirstWalker<MapReduceOper, MROperPlan>(plan));
++    }
++    @Override
++    public void visitMROp(MapReduceOper mr) throws VisitorException {
++        
++
++        if(!mr.combinePlan.isEmpty()) {
++            mr.combinePlan = new PhysicalPlan();
++        }
++    }
++}
+Index: src/org/apache/pig/backend/hadoop/executionengine/physicalLayer/relationalOperators/POPartialAgg.java
+===================================================================
+--- src/org/apache/pig/backend/hadoop/executionengine/physicalLayer/relationalOperators/POPartialAgg.java   (revision 1608863)
++++ src/org/apache/pig/backend/hadoop/executionengine/physicalLayer/relationalOperators/POPartialAgg.java   (working copy)
+@@ -175,7 +175,7 @@
+                         // parent input is over. flush what we have.
+                         inputsExhausted = true;
+                         startSpill();
+-                        LOG.info("Spilling last bits.");
++                        LOG.debug("Spilling last bits.");
+                         continue;
+                     } else {
+                         return EOP_RESULT;
+@@ -204,7 +204,7 @@
+                         aggregateSecondLevel();
+                     }
+                     if (shouldSpill()) {
+-                        LOG.info("Starting spill.");
++                        LOG.debug("Starting spill.");
+                         startSpill(); // next time around, we'll start emitting.
+                     }
+                 }
+@@ -214,7 +214,7 @@
+ 
+     private void estimateMemThresholds() {
+         if (!mapAggDisabled()) {
+-            LOG.info("Getting mem limits; considering " + ALL_POPARTS.size() + " POPArtialAgg objects.");
++            LOG.debug("Getting mem limits; considering " + ALL_POPARTS.size() + " POPArtialAgg objects.");
+ 
+             float percent = getPercentUsageFromProp();
+             memLimits = new MemoryLimits(ALL_POPARTS.size(), percent);
+@@ -230,10 +230,10 @@
+             }
+             avgTupleSize = estTotalMem / estTuples;
+             long totalTuples = memLimits.getCacheLimit();
+-            LOG.info("Estimated total tuples to buffer, based on " + estTuples + " tuples that took up " + estTotalMem + " bytes: " + totalTuples);
++            LOG.debug("Estimated total tuples to buffer, based on " + estTuples + " tuples that took up " + estTotalMem + " bytes: " + totalTuples);
+             firstTierThreshold = (int) (0.5 + totalTuples * (1f - (1f / sizeReduction)));
+             secondTierThreshold = (int) (0.5 + totalTuples *  (1f / sizeReduction));
+-            LOG.info("Setting thresholds. Primary: " + firstTierThreshold + ". Secondary: " + secondTierThreshold);
++            LOG.debug("Setting thresholds. Primary: " + firstTierThreshold + ". Secondary: " + secondTierThreshold);
+         }
+         estimatedMemThresholds = true;
+     }
+@@ -243,9 +243,9 @@
+         aggregateFirstLevel();
+         aggregateSecondLevel();
+         int numAfterReduction = numRecsInProcessedMap + numRecsInRawMap;
+-        LOG.info("After reduction, processed map: " + numRecsInProcessedMap + "; raw map: " + numRecsInRawMap);
++        LOG.debug("After reduction, processed map: " + numRecsInProcessedMap + "; raw map: " + numRecsInRawMap);
+         int minReduction = getMinOutputReductionFromProp();
+-        LOG.info("Observed reduction factor: from " + numBeforeReduction +
++        LOG.debug("Observed reduction factor: from " + numBeforeReduction +
+                 " to " + numAfterReduction +
+                 " => " + numBeforeReduction / numAfterReduction + ".");
+         if ( numBeforeReduction / numAfterReduction < minReduction) {
+@@ -266,15 +266,15 @@
+     }
+ 
+     private boolean shouldAggregateFirstLevel() {
+-        if (LOG.isInfoEnabled() && numRecsInRawMap > firstTierThreshold) {
+-            LOG.info("Aggregating " + numRecsInRawMap + " raw records.");
++        if (LOG.isDebugEnabled() && numRecsInRawMap > firstTierThreshold) {
++            LOG.debug("Aggregating " + numRecsInRawMap + " raw records.");
+         }
+         return (numRecsInRawMap > firstTierThreshold);
+     }
+ 
+     private boolean shouldAggregateSecondLevel() {
+-        if (LOG.isInfoEnabled() && numRecsInProcessedMap > secondTierThreshold) {
+-            LOG.info("Aggregating " + numRecsInProcessedMap + " secondary records.");
++        if (LOG.isDebugEnabled() && numRecsInProcessedMap > secondTierThreshold) {
++            LOG.debug("Aggregating " + numRecsInProcessedMap + " secondary records.");
+         }
+         return (numRecsInProcessedMap > secondTierThreshold);
+     }
+@@ -310,21 +310,21 @@
+         if (spillingIterator != null) return;
+ 
+         if (!rawInputMap.isEmpty()) {
+-            if (LOG.isInfoEnabled()) {
+-                LOG.info("In startSpill(), aggregating raw inputs. " + numRecsInRawMap + " tuples.");
++            if (LOG.isDebugEnabled()) {
++                LOG.debug("In startSpill(), aggregating raw inputs. " + numRecsInRawMap + " tuples.");
+             }
+             aggregateFirstLevel();
+-            if (LOG.isInfoEnabled()) {
+-                LOG.info("processed inputs: " + numRecsInProcessedMap + " tuples.");
++            if (LOG.isDebugEnabled()) {
++                LOG.debug("processed inputs: " + numRecsInProcessedMap + " tuples.");
+             }
+         }
+         if (!processedInputMap.isEmpty()) {
+-            if (LOG.isInfoEnabled()) {
+-                LOG.info("In startSpill(), aggregating processed inputs. " + numRecsInProcessedMap + " tuples.");
++            if (LOG.isDebugEnabled()) {
++                LOG.debug("In startSpill(), aggregating processed inputs. " + numRecsInProcessedMap + " tuples.");
+             }
+             aggregateSecondLevel();
+-            if (LOG.isInfoEnabled()) {
+-                LOG.info("processed inputs: " + numRecsInProcessedMap + " tuples.");
++            if (LOG.isDebugEnabled()) {
++                LOG.debug("processed inputs: " + numRecsInProcessedMap + " tuples.");
+             }
+         }
+         doSpill = true;
+@@ -335,7 +335,7 @@
+         // if no more to spill, return EOP_RESULT.
+         if (processedInputMap.isEmpty()) {
+             spillingIterator = null;
+-            LOG.info("In spillResults(), processed map is empty -- done spilling.");
++            LOG.debug("In spillResults(), processed map is empty -- done spilling.");
+             return EOP_RESULT;
+         } else {
+             Map.Entry<Object, List<Tuple>> entry = spillingIterator.next();
+@@ -353,7 +353,7 @@
+         Result res = getOutput(key, valueTuple);
+         rawInputMap.remove(key);
+         addKeyValToMap(processedInputMap, key, getAggResultTuple(res.result));
+-        numRecsInProcessedMap += valueTuple.size() - 1;
++        numRecsInProcessedMap++;
+     }
+ 
+     /**
+Index: src/org/apache/pig/builtin/JsonMetadata.java
+===================================================================
+--- src/org/apache/pig/builtin/JsonMetadata.java    (revision 1608863)
++++ src/org/apache/pig/builtin/JsonMetadata.java    (working copy)
+@@ -22,6 +22,9 @@
+ import java.io.OutputStream;
+ import java.util.HashSet;
+ import java.util.Set;
++import java.util.concurrent.Callable;
++import java.util.concurrent.ExecutionException;
++import java.util.concurrent.TimeUnit;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+@@ -51,6 +54,11 @@
+ import org.codehaus.jackson.map.ObjectMapper;
+ import org.codehaus.jackson.map.util.LRUMap;
+ 
++import com.google.common.base.Optional;
++import com.google.common.base.Throwables;
++import com.google.common.cache.Cache;
++import com.google.common.cache.CacheBuilder;
++
+ /**
+  * Reads and Writes metadata using JSON in metafiles next to the data.
+  *
+@@ -71,6 +79,13 @@
+ 
+     private transient LRUMap<ElementDescriptor, Boolean> lookupCache = new LRUMap<ElementDescriptor, Boolean>(100, 1000);
+ 
++    private static transient Cache<String, Optional<ResourceSchema>> SCHEMA_CACHE = CacheBuilder.newBuilder().
++            concurrencyLevel(3).
++            expireAfterAccess(1, TimeUnit.MINUTES).
++            initialCapacity(25).
++            maximumSize(100).
++            build();
++    
+     public JsonMetadata() {
+         this(".pig_schema", ".pig_header", ".pig_stats");
+     }
+@@ -173,6 +188,20 @@
+         return getSchema(location, job, false);
+     }
+ 
++    public ResourceSchema getSchema(final String location, final Job job, final boolean isSchemaOn) throws IOException {
++        try {
++            return SCHEMA_CACHE.get(location, new Callable<Optional<ResourceSchema>>() {
++                @Override
++                public Optional<ResourceSchema> call() throws Exception {
++                    return Optional.fromNullable(
++                            loadSchema(location, job, isSchemaOn));
++                }}).orNull();
++        } catch (ExecutionException e) {
++            Throwables.propagateIfInstanceOf(e.getCause(), IOException.class);
++            throw Throwables.propagate(e.getCause());
++        }
++    }
++    
+     /**
+      * Read the schema from json metadata file
+      * If isSchemaOn parameter is false, the errors are suppressed and logged
+@@ -182,7 +211,7 @@
+      * @return schema
+      * @throws IOException
+      */
+-    public ResourceSchema getSchema(String location, Job job, boolean isSchemaOn) throws IOException {
++    private ResourceSchema loadSchema(String location, Job job, boolean isSchemaOn) throws IOException {
+         Configuration conf = job.getConfiguration();
+         Set<ElementDescriptor> schemaFileSet = null;
+         try {
+@@ -214,6 +243,7 @@
+             String msg = "Unable to load Resource Schema for "+location;
+             return nullOrException(isSchemaOn, msg, e);
+         }
++                
+         return resourceSchema;
+     }
+ 
+Index: src/org/apache/pig/builtin/PigStorage.java
+===================================================================
+--- src/org/apache/pig/builtin/PigStorage.java  (revision 1608863)
++++ src/org/apache/pig/builtin/PigStorage.java  (working copy)
+@@ -28,7 +28,6 @@
+ import org.apache.commons.cli.GnuParser;
+ import org.apache.commons.cli.HelpFormatter;
+ import org.apache.commons.cli.Option;
+-import org.apache.commons.cli.OptionBuilder;
+ import org.apache.commons.cli.Options;
+ import org.apache.commons.cli.ParseException;
+ import org.apache.commons.logging.Log;
+@@ -71,7 +70,6 @@
+ import org.apache.pig.data.DataByteArray;
+ import org.apache.pig.data.Tuple;
+ import org.apache.pig.data.TupleFactory;
+-import org.apache.pig.impl.PigContext;
+ import org.apache.pig.impl.logicalLayer.FrontendException;
+ import org.apache.pig.impl.util.CastUtils;
+ import org.apache.pig.impl.util.ObjectSerializer;
+@@ -149,10 +147,6 @@
+     protected ResourceSchema schema;
+     protected LoadCaster caster;
+ 
+-    private final CommandLine configuredOptions;
+-    private final Options validOptions = new Options();
+-    private final static CommandLineParser parser = new GnuParser();
+-
+     protected boolean[] mRequiredColumns = null;
+     private boolean mRequiredColumnsInitialized = false;
+ 
+@@ -163,14 +157,21 @@
+     private static final String TAG_SOURCE_PATH = "tagPath";
+     private Path sourcePath = null;
+ 
+-    private void populateValidOptions() {
++    private Options populateValidOptions() {
++        Options validOptions = new Options();
+         validOptions.addOption("schema", false, "Loads / Stores the schema of the relation using a hidden JSON file.");
+         validOptions.addOption("noschema", false, "Disable attempting to load data schema from the filesystem.");
+         validOptions.addOption(TAG_SOURCE_FILE, false, "Appends input source file name to beginning of each tuple.");
+         validOptions.addOption(TAG_SOURCE_PATH, false, "Appends input source file path to beginning of each tuple.");
+         validOptions.addOption("tagsource", false, "Appends input source file name to beginning of each tuple.");
+-        Option overwrite = OptionBuilder.hasOptionalArgs(1).withArgName("overwrite").withLongOpt("overwrite").withDescription("Overwrites the destination.").create();
+-        validOptions.addOption(overwrite);        
++        Option overwrite = new Option(" ", "Overwrites the destination.");
++        overwrite.setLongOpt("overwrite");
++        overwrite.setOptionalArg(true);
++        overwrite.setArgs(1);
++        overwrite.setArgName("overwrite");
++        validOptions.addOption(overwrite);
++        
++        return validOptions;
+     }
+ 
+     public PigStorage() {
+@@ -204,11 +205,12 @@
+      * @throws ParseException
+      */
+     public PigStorage(String delimiter, String options) {
+-        populateValidOptions();
+         fieldDel = StorageUtil.parseFieldDel(delimiter);
++        Options validOptions = populateValidOptions();
+         String[] optsArr = options.split(" ");
+         try {
+-            configuredOptions = parser.parse(validOptions, optsArr);
++            CommandLineParser parser = new GnuParser();
++            CommandLine configuredOptions = parser.parse(validOptions, optsArr);
+             isSchemaOn = configuredOptions.hasOption("schema");
+             if (configuredOptions.hasOption("overwrite")) {
+                 String value = configuredOptions.getOptionValue("overwrite");
+Index: src/org/apache/pig/newplan/logical/relational/LOUnion.java
+===================================================================
+--- src/org/apache/pig/newplan/logical/relational/LOUnion.java  (revision 1608863)
++++ src/org/apache/pig/newplan/logical/relational/LOUnion.java  (working copy)
+@@ -76,21 +76,29 @@
+         }
+         
+         LogicalSchema mergedSchema = null;
+-        LogicalSchema s0 = ((LogicalRelationalOperator)inputs.get(0)).getSchema();
+         if ( inputs.size() == 1 )
+-            return schema = s0;
++            return schema = ((LogicalRelationalOperator)inputs.get(0)).getSchema();
+         
++        List<String> inputAliases = new ArrayList<String>(inputs.size());
++        List<LogicalSchema> inputSchemas = new ArrayList<LogicalSchema>(inputs.size());
++        for (Operator input : inputs) {
++            LogicalRelationalOperator lop = (LogicalRelationalOperator)input;
++            inputAliases.add(lop.getAlias());
++            inputSchemas.add(lop.getSchema());
++        }
++        
+         if( isOnSchema() ) {
+-            mergedSchema = createMergedSchemaOnAlias( inputs );
++            mergedSchema = createMergedSchemaOnAlias( inputSchemas, inputAliases );
+         } else {
+-            LogicalSchema s1 = ((LogicalRelationalOperator)inputs.get(1)).getSchema();
++            LogicalSchema s0 = inputSchemas.get(0);
++            LogicalSchema s1 = inputSchemas.get(1);
+             mergedSchema = LogicalSchema.merge(s0, s1, LogicalSchema.MergeMode.Union);
+             if (mergedSchema==null)
+                 return null;
+             
+             // Merge schema
+-            for (int i=2;i<inputs.size();i++) {
+-                LogicalSchema otherSchema = ((LogicalRelationalOperator)inputs.get(i)).getSchema();
++            for (int i=2;i<inputSchemas.size();i++) {
++                LogicalSchema otherSchema = inputSchemas.get(i);
+                 if (mergedSchema==null || otherSchema==null)
+                     return null;
+                 mergedSchema = LogicalSchema.merge(mergedSchema, otherSchema, LogicalSchema.MergeMode.Union);
+@@ -100,28 +108,36 @@
+         }
+ 
+         // Bring back cached uid if any; otherwise, cache uid generated
+-        for (int i=0;i<s0.size();i++)
++        for (int i=0;i<mergedSchema.size();i++)
+         {
+-            LogicalSchema.LogicalFieldSchema outputFieldSchema;
+-            if (onSchema) {
+-                outputFieldSchema = mergedSchema.getFieldSubNameMatch(s0.getField(i).alias);
+-            } else {
+-                outputFieldSchema = mergedSchema.getField(i);
+-            }
++            LogicalSchema.LogicalFieldSchema outputFieldSchema = mergedSchema.getField(i);
++
+             long uid = -1;
+-            for (Pair<Long, Long> pair : uidMapping) {
+-                if (pair.second==s0.getField(i).uid) {
+-                    uid = pair.first;
+-                    break;
++            
++            // Search all the cached uid mappings by input field to see if 
++            // we've cached an output uid for this output field
++            for (LogicalSchema inputSchema : inputSchemas) {
++                LogicalSchema.LogicalFieldSchema inputFieldSchema;
++                if (onSchema) {
++                    inputFieldSchema = inputSchema.getFieldSubNameMatch(outputFieldSchema.alias);
++                } else {
++                    inputFieldSchema = inputSchema.getField(i);
+                 }
++                
++                if (inputFieldSchema != null) {
++                    uid = getCachedOuputUid(inputFieldSchema.uid);
++                    if (uid >= 0) break;
++                }
+             }
++            
++            // No cached uid. Allocate one, and locate and cache all inputs.
+             if (uid==-1) {
+                 uid = LogicalExpression.getNextUid();
+-                for (Operator input : inputs) {
++                for (LogicalSchema inputSchema : inputSchemas) {
+                     long inputUid;
+                     LogicalFieldSchema matchedInputFieldSchema;
+                    if (onSchema) {
+-                       matchedInputFieldSchema = ((LogicalRelationalOperator)input).getSchema().getFieldSubNameMatch(s0.getField(i).alias);
++                       matchedInputFieldSchema = inputSchema.getFieldSubNameMatch(mergedSchema.getField(i).alias);
+                         if (matchedInputFieldSchema!=null) {
+                             inputUid = matchedInputFieldSchema.uid;
+                             uidMapping.add(new Pair<Long, Long>(uid, inputUid));
+@@ -129,10 +145,9 @@
+                     }
+                     else {
+                         matchedInputFieldSchema = mergedSchema.getField(i);
+-                       inputUid = ((LogicalRelationalOperator)input).getSchema().getField(i).uid;
++                       inputUid = inputSchema.getField(i).uid;
+                        uidMapping.add(new Pair<Long, Long>(uid, inputUid));
+                     }
+-                   
+                 }
+             }
+ 
+@@ -145,15 +160,15 @@
+     /**
+      * create schema for union-onschema
+      */
+-    private LogicalSchema createMergedSchemaOnAlias(List<Operator> ops)
++    private LogicalSchema createMergedSchemaOnAlias(List<LogicalSchema> inputSchemas, 
++            List<String> inputAliases) 
+     throws FrontendException {
+         ArrayList<LogicalSchema> schemas = new ArrayList<LogicalSchema>();
+-        for( Operator op : ops ){
+-            LogicalRelationalOperator lop = (LogicalRelationalOperator)op;
+-            LogicalSchema sch = lop.getSchema();
++        for (int i = 0; i < inputSchemas.size(); i++){
++            LogicalSchema sch = inputSchemas.get(i);
+             for( LogicalFieldSchema fs : sch.getFields() ) {
+                 if(fs.alias == null){
+-                    String msg = "Schema of relation " + lop.getAlias()
++                    String msg = "Schema of relation " + inputAliases.get(i)
+                         + " has a null fieldschema for column(s). Schema :" + sch.toString(false);
+                     throw new FrontendException( this, msg, 1116, PigException.INPUT );
+                 }
+@@ -174,6 +189,19 @@
+         return mergedSchema;
+     }
+     
++    private long getCachedOuputUid(long inputUid) {
++        long uid = -1;
++        
++        for (Pair<Long, Long> pair : uidMapping) {
++            if (pair.second==inputUid) {
++                uid = pair.first;
++                break;
++            }
++        }
++        
++        return uid;
++    }
++
+     @Override
+     public void accept(PlanVisitor v) throws FrontendException {
+         if (!(v instanceof LogicalRelationalNodesVisitor)) {
+Index: test/org/apache/pig/test/TestPOPartialAggPlan.java
+===================================================================
+--- test/org/apache/pig/test/TestPOPartialAggPlan.java  (revision 1608863)
++++ test/org/apache/pig/test/TestPOPartialAggPlan.java  (working copy)
+@@ -17,9 +17,7 @@
+  */
+ package org.apache.pig.test;
+ 
+-import static org.junit.Assert.assertEquals;
+-import static org.junit.Assert.assertNotNull;
+-import static org.junit.Assert.assertNull;
++import static org.junit.Assert.*;
+ 
+ import java.util.Iterator;
+ 
+@@ -80,10 +78,46 @@
+         assertEquals(mrp.size(), 1);
+ 
+         assertNotNull("POPartialAgg should be present",findPOPartialAgg(mrp));
+-
+     }
+-
+-
++    
++    @Test
++    public void testMapAggPropTrueNoNoCombinerProp() throws Exception{
++        //test with pig.exec.mapPartAgg to true
++        String query = getGByQuery();
++        pc.getProperties().setProperty(PigConfiguration.PROP_EXEC_MAP_PARTAGG, "true");
++        MROperPlan mrp = Util.buildMRPlan(query, pc);
++        assertEquals(mrp.size(), 1);
++        assertFalse(mrp.getRoots().get(0).combinePlan.isEmpty());
++        
++        assertNotNull("POPartialAgg should be present",findPOPartialAgg(mrp));
++    }
++    
++    @Test
++    public void testMapAggPropTrueNoCombinerPropTrue() throws Exception{
++        //test with pig.exec.mapPartAgg to true
++        String query = getGByQuery();
++        pc.getProperties().setProperty(PigConfiguration.PROP_EXEC_MAP_PARTAGG, "true");
++        pc.getProperties().setProperty(PigConfiguration.PROP_NO_COMBINER, "true");
++        MROperPlan mrp = Util.buildMRPlan(query, pc);
++        assertEquals(mrp.size(), 1);
++        assertTrue(mrp.getRoots().get(0).combinePlan.isEmpty());
++        
++        assertNotNull("POPartialAgg should be present",findPOPartialAgg(mrp));
++    }
++    
++    @Test
++    public void testMapAggPropTrueNoCombinerFalse() throws Exception{
++        //test with pig.exec.mapPartAgg to true
++        String query = getGByQuery();
++        pc.getProperties().setProperty(PigConfiguration.PROP_EXEC_MAP_PARTAGG, "true");
++        pc.getProperties().setProperty(PigConfiguration.PROP_NO_COMBINER, "false");
++        MROperPlan mrp = Util.buildMRPlan(query, pc);
++        assertEquals(mrp.size(), 1);
++        assertFalse(mrp.getRoots().get(0).combinePlan.isEmpty());
++        
++        assertNotNull("POPartialAgg should be present",findPOPartialAgg(mrp));
++    }
++    
+     private Object findPOPartialAgg(MROperPlan mrp) {
+         PhysicalPlan mapPlan = mrp.getRoots().get(0).mapPlan;
+         return findPOPartialAgg(mapPlan);
+Index: test/org/apache/pig/test/TestUnionOnSchema.java
+===================================================================
+--- test/org/apache/pig/test/TestUnionOnSchema.java (revision 1608863)
++++ test/org/apache/pig/test/TestUnionOnSchema.java (working copy)
+@@ -31,6 +31,8 @@
+ import org.apache.pig.ExecType;
+ import org.apache.pig.PigException;
+ import org.apache.pig.PigServer;
++import org.apache.pig.builtin.mock.Storage;
++import org.apache.pig.builtin.mock.Storage.Data;
+ import org.apache.pig.data.DataByteArray;
+ import org.apache.pig.data.DataType;
+ import org.apache.pig.data.Tuple;
+@@ -51,6 +53,7 @@
+     private static final String INP_FILE_2NUMS = "TestUnionOnSchemaInput1";
+     private static final String INP_FILE_2NUM_1CHAR_1BAG = "TestUnionOnSchemaInput2";
+     private static final String INP_FILE_EMPTY= "TestUnionOnSchemaInput3";
++    private static final String INP_FILE_3NUMS = "TestUnionOnSchemaInput4";
+     
+     @Before
+     public void setUp() throws Exception {
+@@ -77,6 +80,11 @@
+ 
+         //3rd input - empty file
+         Util.createLocalInputFile(INP_FILE_EMPTY, new String[0]);
++        
++        // 4th input
++        String[] input4 = {"1\t2\t3","4\t5\t6",};
++        Util.createLocalInputFile(INP_FILE_3NUMS, input4);
++
+     }
+     
+     @AfterClass
+@@ -449,6 +457,45 @@
+         Util.checkQueryOutputsAfterSort(it, expectedRes);
+     }
+     
++    @Test
++    public void testUnionOnSchemaAdditionalColumnsWithImplicitSplit() throws IOException {
++        PigServer pig = new PigServer(ExecType.LOCAL);
++        Data data = Storage.resetData(pig);
++        
++        // Use batch to force multiple outputs from relation l3. This causes 
++        // ImplicitSplitInsertVisitor to call SchemaResetter. 
++        pig.setBatchOn();
++        
++        String query =
++            "  l1 = load '" + INP_FILE_2NUMS + "' as (i : int, j: int);"
++            + "l2 = load '" + INP_FILE_3NUMS + "' as (i : int, j : int, k : int);" 
++            + "l3 = load '" + INP_FILE_EMPTY + "' as (i : int, j : int, k : int, l :int);"
++            + "u = union onschema l1, l2, l3;"
++            + "store u into 'out1' using mock.Storage;"
++            + "store l3 into 'out2' using mock.Storage;"
++        ;
++
++        Util.registerMultiLineQuery(pig, query);
++        
++        pig.executeBatch();
++        
++        
++        List<Tuple> list1 = data.get("out1");
++        List<Tuple> list2 = data.get("out2");
++        
++        List<Tuple> expectedRes = 
++                Util.getTuplesFromConstantTupleStrings(
++                        new String[] {
++                                "(1,2,null,null)",
++                                "(5,3,null,null)",
++                                "(1,2,3,null)",
++                                "(4,5,6,null)",
++                        });
++        
++        Util.compareActualAndExpectedResults(list1, expectedRes);
++        
++        assertEquals(0, list2.size());
++    }
+     
+     /**
+      * Test UNION ONSCHEMA on 3 inputs 

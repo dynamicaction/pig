@@ -1204,6 +1204,7 @@ class MultiQueryOptimizer extends MROpPlanVisitor {
         MultiQueryPackager pkgr = new MultiQueryPackager();
         pkgr.setInCombiner(inCombiner);
         pkgr.setSameMapKeyType(sameMapKeyType);
+        pkgr.setNumInputs(pkg.getNumInps());
         pkg.setPkgr(pkgr);
         return pkg;
     }

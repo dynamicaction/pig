@@ -1,0 +1,239 @@
+commit 274063da9db51afc967f12610a1641776cd90311
+Author: U-MattWork\Matthew <whimatthew.cs@gmail.com>
+Date:   Tue Apr 28 11:34:09 2015 -0500
+
+    Applied patches for ECM
+
+diff --git a/src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/MapReduceLauncher.java b/src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/MapReduceLauncher.java
+index 595e68c..1a73efe 100644
+--- a/src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/MapReduceLauncher.java
++++ b/src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/MapReduceLauncher.java
+@@ -53,6 +53,7 @@ import org.apache.pig.backend.hadoop.datastorage.ConfigurationUtil;
+ import org.apache.pig.backend.hadoop.executionengine.JobCreationException;
+ import org.apache.pig.backend.hadoop.executionengine.Launcher;
+ import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MRCompiler.LastInputStreamingOptimizer;
++import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.CombinerPlanRemover;
+ import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.DotMRPrinter;
+ import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.EndOfAllInputSetter;
+ import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.MRIntermediateDataVisitor;
+@@ -637,11 +638,18 @@ public class MapReduceLauncher extends Launcher{
+         String lastInputChunkSize =
+                 pc.getProperties().getProperty(
+                         "last.input.chunksize", JoinPackager.DEFAULT_CHUNK_SIZE);
+-
+-        String prop = pc.getProperties().getProperty(PigConfiguration.PIG_EXEC_NO_COMBINER);
+-        if (!pc.inIllustrator && !("true".equals(prop)))  {
+-            boolean doMapAgg =
+-                    Boolean.valueOf(pc.getProperties().getProperty(PigConfiguration.PIG_EXEC_MAP_PARTAGG,"false"));
++        
++        boolean doMapAgg =
++                Boolean.valueOf(pc.getProperties().getProperty(PigConfiguration.PROP_EXEC_MAP_PARTAGG,"false"));
++        boolean doCombiner = 
++                !Boolean.valueOf(pc.getProperties().getProperty(PigConfiguration.PROP_NO_COMBINER,
++                        // Default to no combiner when doMapAgg is true
++                        String.valueOf(doMapAgg))); 
++        
++        // If doMapAgg is true, add the combiner even if it was disabled, since
++        // CombinerOptimizer actually adds the POPartialAgg plan. We'll remove 
++        // the combine plan later.
++        if (!pc.inIllustrator && (doCombiner || doMapAgg))  {
+             CombinerOptimizer co = new CombinerOptimizer(plan, doMapAgg);
+             co.visit();
+             //display the warning message(s) from the CombinerOptimizer
+@@ -660,7 +668,7 @@ public class MapReduceLauncher extends Launcher{
+             la.adjust();
+         }
+         // Optimize to use secondary sort key if possible
+-        prop = pc.getProperties().getProperty(PigConfiguration.PIG_EXEC_NO_SECONDARY_KEY);
++        String prop = pc.getProperties().getProperty(PigConfiguration.PIG_EXEC_NO_SECONDARY_KEY);
+         if (!pc.inIllustrator && !("true".equals(prop)))  {
+             SecondaryKeyOptimizerMR skOptimizer = new SecondaryKeyOptimizerMR(plan);
+             skOptimizer.visit();
+@@ -670,6 +678,13 @@ public class MapReduceLauncher extends Launcher{
+         POPackageAnnotator pkgAnnotator = new POPackageAnnotator(plan);
+         pkgAnnotator.visit();
+ 
++        // now we can remove the combiner plan if we don't really need it.
++        // note the combiner plan is needed by POPackageAnnotator
++        if (!doCombiner){
++            CombinerPlanRemover remover = new CombinerPlanRemover(plan);
++            remover.visit();
++        }
++
+         // optimize joins
+         LastInputStreamingOptimizer liso =
+                 new MRCompiler.LastInputStreamingOptimizer(plan, lastInputChunkSize);
+diff --git a/src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/MultiQueryOptimizer.java b/src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/MultiQueryOptimizer.java
+index 5331766..dc1dc9a 100644
+--- a/src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/MultiQueryOptimizer.java
++++ b/src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/MultiQueryOptimizer.java
+@@ -1194,6 +1194,7 @@ class MultiQueryOptimizer extends MROpPlanVisitor {
+         MultiQueryPackager pkgr = new MultiQueryPackager();
+         pkgr.setInCombiner(inCombiner);
+         pkgr.setSameMapKeyType(sameMapKeyType);
++        pkgr.setNumInputs(pkg.getNumInps());
+         pkg.setPkgr(pkgr);
+         return pkg;
+     }
+diff --git a/src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/plans/CombinerPlanRemover.java b/src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/plans/CombinerPlanRemover.java
+new file mode 100644
+index 0000000..74aceb1
+--- /dev/null
++++ b/src/org/apache/pig/backend/hadoop/executionengine/mapReduceLayer/plans/CombinerPlanRemover.java
+@@ -0,0 +1,21 @@
++package org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans;
++
++import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MapReduceOper;
++import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhysicalPlan;
++import org.apache.pig.impl.plan.DepthFirstWalker;
++import org.apache.pig.impl.plan.VisitorException;
++
++public class CombinerPlanRemover extends MROpPlanVisitor {
++
++    public CombinerPlanRemover(MROperPlan plan) {
++        super(plan, new DepthFirstWalker<MapReduceOper, MROperPlan>(plan));
++    }
++    @Override
++    public void visitMROp(MapReduceOper mr) throws VisitorException {
++        
++
++        if(!mr.combinePlan.isEmpty()) {
++            mr.combinePlan = new PhysicalPlan();
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/src/org/apache/pig/backend/hadoop/executionengine/physicalLayer/relationalOperators/POPartialAgg.java b/src/org/apache/pig/backend/hadoop/executionengine/physicalLayer/relationalOperators/POPartialAgg.java
+index 27551f2..6f9ecc5 100644
+--- a/src/org/apache/pig/backend/hadoop/executionengine/physicalLayer/relationalOperators/POPartialAgg.java
++++ b/src/org/apache/pig/backend/hadoop/executionengine/physicalLayer/relationalOperators/POPartialAgg.java
+@@ -233,7 +233,7 @@ public class POPartialAgg extends PhysicalOperator implements Spillable, Groupin
+                     if (parentPlan.endOfAllInput) {
+                         // parent input is over. flush what we have.
+                         inputsExhausted = true;
+-                        LOG.info("Spilling last bits.");
++                        LOG.debug("Spilling last bits.");
+                         startSpill(true);
+                         continue;
+                     } else {
+@@ -267,7 +267,7 @@ public class POPartialAgg extends PhysicalOperator implements Spillable, Groupin
+ 
+     private void estimateMemThresholds() {
+         if (!mapAggDisabled()) {
+-            LOG.info("Getting mem limits; considering " + ALL_POPARTS.size()
++            LOG.debug("Getting mem limits; considering " + ALL_POPARTS.size()
+                     + " POPArtialAgg objects." + " with memory percentage "
+                     + percentUsage);
+             MemoryLimits memLimits = new MemoryLimits(ALL_POPARTS.size(), percentUsage);
+@@ -283,10 +283,10 @@ public class POPartialAgg extends PhysicalOperator implements Spillable, Groupin
+             }
+             avgTupleSize = estTotalMem / estTuples;
+             long totalTuples = memLimits.getCacheLimit();
+-            LOG.info("Estimated total tuples to buffer, based on " + estTuples + " tuples that took up " + estTotalMem + " bytes: " + totalTuples);
++            LOG.debug("Estimated total tuples to buffer, based on " + estTuples + " tuples that took up " + estTotalMem + " bytes: " + totalTuples);
+             firstTierThreshold = (int) (0.5 + totalTuples * (1f - (1f / sizeReduction)));
+             secondTierThreshold = (int) (0.5 + totalTuples *  (1f / sizeReduction));
+-            LOG.info("Setting thresholds. Primary: " + firstTierThreshold + ". Secondary: " + secondTierThreshold);
++            LOG.debug("Setting thresholds. Primary: " + firstTierThreshold + ". Secondary: " + secondTierThreshold);
+             // The second tier should at least allow one tuple before it tries to aggregate.
+             // This code retains the total number of tuples in the buffer while guaranteeing
+             // the second tier has at least one tuple.
+@@ -303,8 +303,8 @@ public class POPartialAgg extends PhysicalOperator implements Spillable, Groupin
+             int numBeforeReduction = numRecsInProcessedMap + numRecsInRawMap;
+             aggregateBothLevels(false, false);
+             int numAfterReduction = numRecsInProcessedMap + numRecsInRawMap;
+-            LOG.info("After reduction, processed map: " + numRecsInProcessedMap + "; raw map: " + numRecsInRawMap);
+-            LOG.info("Observed reduction factor: from " + numBeforeReduction +
++            LOG.debug("After reduction, processed map: " + numRecsInProcessedMap + "; raw map: " + numRecsInRawMap);
++            LOG.debug("Observed reduction factor: from " + numBeforeReduction +
+                     " to " + numAfterReduction +
+                     " => " + numBeforeReduction / numAfterReduction + ".");
+             if ( numBeforeReduction / numAfterReduction < minOutputReduction) {
+@@ -365,7 +365,7 @@ public class POPartialAgg extends PhysicalOperator implements Spillable, Groupin
+         // If spillingIterator is null, we are already spilling and don't need to set up.
+         if (spillingIterator != null) return;
+ 
+-        LOG.info("Starting spill.");
++        LOG.debug("Starting spill.");
+         if (aggregate) {
+             aggregateBothLevels(false, true);
+         }
+@@ -377,7 +377,7 @@ public class POPartialAgg extends PhysicalOperator implements Spillable, Groupin
+         // if no more to spill, return EOP_RESULT.
+         if (processedInputMap.isEmpty()) {
+             spillingIterator = null;
+-            LOG.info("In spillResults(), processed map is empty -- done spilling.");
++            LOG.debug("In spillResults(), processed map is empty -- done spilling.");
+             return EOP_RESULT;
+         } else {
+             Map.Entry<Object, List<Tuple>> entry = spillingIterator.next();
+diff --git a/src/org/apache/pig/builtin/JsonMetadata.java b/src/org/apache/pig/builtin/JsonMetadata.java
+index 08a6f5d..8c67d71 100644
+--- a/src/org/apache/pig/builtin/JsonMetadata.java
++++ b/src/org/apache/pig/builtin/JsonMetadata.java
+@@ -22,6 +22,9 @@ import java.io.IOException;
+ import java.io.OutputStream;
+ import java.util.HashSet;
+ import java.util.Set;
++import java.util.concurrent.Callable;
++import java.util.concurrent.ExecutionException;
++import java.util.concurrent.TimeUnit;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+@@ -50,6 +53,11 @@ import org.codehaus.jackson.JsonParseException;
+ import org.codehaus.jackson.map.JsonMappingException;
+ import org.codehaus.jackson.map.ObjectMapper;
+ import org.codehaus.jackson.map.util.LRUMap;
++ 
++import com.google.common.base.Optional;
++import com.google.common.base.Throwables;
++import com.google.common.cache.Cache;
++import com.google.common.cache.CacheBuilder;
+ 
+ /**
+  * Reads and Writes metadata using JSON in metafiles next to the data.
+@@ -71,6 +79,13 @@ public class JsonMetadata implements LoadMetadata, StoreMetadata {
+ 
+     private transient LRUMap<ElementDescriptor, Boolean> lookupCache = new LRUMap<ElementDescriptor, Boolean>(100, 1000);
+ 
++    private static transient Cache<String, Optional<ResourceSchema>> SCHEMA_CACHE = CacheBuilder.newBuilder().
++            concurrencyLevel(3).
++            expireAfterAccess(1, TimeUnit.MINUTES).
++            initialCapacity(25).
++            maximumSize(100).
++            build();
++
+     public JsonMetadata() {
+         this(".pig_schema", ".pig_header", ".pig_stats");
+     }
+@@ -173,6 +188,20 @@ public class JsonMetadata implements LoadMetadata, StoreMetadata {
+         return getSchema(location, job, false);
+     }
+ 
++    public ResourceSchema getSchema(final String location, final Job job, final boolean isSchemaOn) throws IOException {
++        try {
++            return SCHEMA_CACHE.get(location, new Callable<Optional<ResourceSchema>>() {
++                @Override
++                public Optional<ResourceSchema> call() throws Exception {
++                    return Optional.fromNullable(
++                            loadSchema(location, job, isSchemaOn));
++                }}).orNull();
++        } catch (ExecutionException e) {
++            Throwables.propagateIfInstanceOf(e.getCause(), IOException.class);
++            throw Throwables.propagate(e.getCause());
++        }
++    }
++
+     /**
+      * Read the schema from json metadata file
+      * If isSchemaOn parameter is false, the errors are suppressed and logged
+@@ -182,7 +211,7 @@ public class JsonMetadata implements LoadMetadata, StoreMetadata {
+      * @return schema
+      * @throws IOException
+      */
+-    public ResourceSchema getSchema(String location, Job job, boolean isSchemaOn) throws IOException {
++    private ResourceSchema loadSchema(String location, Job job, boolean isSchemaOn) throws IOException {
+         Configuration conf = job.getConfiguration();
+         Set<ElementDescriptor> schemaFileSet = null;
+         try {
