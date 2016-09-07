@@ -17,9 +17,7 @@
  */
 package org.apache.pig.test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
+import static org.junit.Assert.*;
 
 import java.util.Iterator;
 
@@ -83,6 +81,41 @@ public class TestPOPartialAggPlan  {
 
     }
 
+    @Test
+    public void testMapAggPropTrueNoNoCombinerProp() throws Exception{
+        //test with pig.exec.mapPartAgg to true
+        String query = getGByQuery();
+        pc.getProperties().setProperty(PigConfiguration.PROP_EXEC_MAP_PARTAGG, "true");
+        MROperPlan mrp = Util.buildMRPlan(query, pc);
+        assertEquals(mrp.size(), 1);
+        assertFalse(mrp.getRoots().get(0).combinePlan.isEmpty());
+
+        assertNotNull("POPartialAgg should be present",findPOPartialAgg(mrp));
+    }
+    @Test
+    public void testMapAggPropTrueNoCombinerPropTrue() throws Exception{
+        //test with pig.exec.mapPartAgg to true
+        String query = getGByQuery();
+        pc.getProperties().setProperty(PigConfiguration.PROP_EXEC_MAP_PARTAGG, "true");
+        pc.getProperties().setProperty(PigConfiguration.PROP_NO_COMBINER, "true");
+        MROperPlan mrp = Util.buildMRPlan(query, pc);
+        assertEquals(mrp.size(), 1);
+        assertTrue(mrp.getRoots().get(0).combinePlan.isEmpty());
+
+        assertNotNull("POPartialAgg should be present",findPOPartialAgg(mrp));
+    }
+    @Test
+    public void testMapAggPropTrueNoCombinerFalse() throws Exception{
+        //test with pig.exec.mapPartAgg to true
+        String query = getGByQuery();
+        pc.getProperties().setProperty(PigConfiguration.PROP_EXEC_MAP_PARTAGG, "true");
+        pc.getProperties().setProperty(PigConfiguration.PROP_NO_COMBINER, "false");
+        MROperPlan mrp = Util.buildMRPlan(query, pc);
+        assertEquals(mrp.size(), 1);
+        assertFalse(mrp.getRoots().get(0).combinePlan.isEmpty());
+
+        assertNotNull("POPartialAgg should be present",findPOPartialAgg(mrp));
+    }
 
     private Object findPOPartialAgg(MROperPlan mrp) {
         PhysicalPlan mapPlan = mrp.getRoots().get(0).mapPlan;

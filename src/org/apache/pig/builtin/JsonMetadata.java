@@ -22,6 +22,9 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -51,6 +54,11 @@ import org.codehaus.jackson.map.JsonMappingException;
 import org.codehaus.jackson.map.ObjectMapper;
 import org.codehaus.jackson.map.util.LRUMap;
 
+import com.google.common.base.Optional;
+import com.google.common.base.Throwables;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
+
 /**
  * Reads and Writes metadata using JSON in metafiles next to the data.
  *
@@ -70,6 +78,13 @@ public class JsonMetadata implements LoadMetadata, StoreMetadata {
     private byte recordDel;
 
     private transient LRUMap<ElementDescriptor, Boolean> lookupCache = new LRUMap<ElementDescriptor, Boolean>(100, 1000);
+
+    private static transient Cache<String, Optional<ResourceSchema>> SCHEMA_CACHE = CacheBuilder.newBuilder().
+            concurrencyLevel(3).
+            expireAfterAccess(1, TimeUnit.MINUTES).
+            initialCapacity(25).
+            maximumSize(100).
+            build();
 
     public JsonMetadata() {
         this(".pig_schema", ".pig_header", ".pig_stats");
@@ -173,6 +188,20 @@ public class JsonMetadata implements LoadMetadata, StoreMetadata {
         return getSchema(location, job, false);
     }
 
+    public ResourceSchema getSchema(final String location, final Job job, final boolean isSchemaOn) throws IOException {
+        try {
+            return SCHEMA_CACHE.get(location, new Callable<Optional<ResourceSchema>>() {
+                @Override
+                public Optional<ResourceSchema> call() throws Exception {
+                    return Optional.fromNullable(
+                            loadSchema(location, job, isSchemaOn));
+                }}).orNull();
+        } catch (ExecutionException e) {
+            Throwables.propagateIfInstanceOf(e.getCause(), IOException.class);
+            throw Throwables.propagate(e.getCause());
+        }
+    }
+
     /**
      * Read the schema from json metadata file
      * If isSchemaOn parameter is false, the errors are suppressed and logged
@@ -182,7 +211,7 @@ public class JsonMetadata implements LoadMetadata, StoreMetadata {
      * @return schema
      * @throws IOException
      */
-    public ResourceSchema getSchema(String location, Job job, boolean isSchemaOn) throws IOException {
+    public ResourceSchema loadSchema(String location, Job job, boolean isSchemaOn) throws IOException {
         Configuration conf = job.getConfiguration();
         Set<ElementDescriptor> schemaFileSet = null;
         try {
