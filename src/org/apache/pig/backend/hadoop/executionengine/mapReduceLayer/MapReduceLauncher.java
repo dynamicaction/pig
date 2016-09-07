@@ -57,6 +57,7 @@ import org.apache.pig.backend.hadoop.datastorage.ConfigurationUtil;
 import org.apache.pig.backend.hadoop.executionengine.JobCreationException;
 import org.apache.pig.backend.hadoop.executionengine.Launcher;
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MRCompiler.LastInputStreamingOptimizer;
+import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.CombinerPlanRemover;
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.DotMRPrinter;
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.EndOfAllInputSetter;
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.MRIntermediateDataVisitor;
@@ -657,10 +658,18 @@ public class MapReduceLauncher extends Launcher {
                 pc.getProperties().getProperty(
                         "last.input.chunksize", JoinPackager.DEFAULT_CHUNK_SIZE);
 
-        String prop = pc.getProperties().getProperty(PigConfiguration.PIG_EXEC_NO_COMBINER);
-        if (!pc.inIllustrator && !("true".equals(prop)))  {
-            boolean doMapAgg =
-                    Boolean.valueOf(pc.getProperties().getProperty(PigConfiguration.PIG_EXEC_MAP_PARTAGG,"false"));
+        boolean doMapAgg =
+            Boolean.valueOf(pc.getProperties().getProperty(PigConfiguration.PROP_EXEC_MAP_PARTAGG,"false"));
+
+        boolean doCombiner =
+            !Boolean.valueOf(pc.getProperties().getProperty(PigConfiguration.PROP_NO_COMBINER,
+                    // Default to no combiner when doMapAgg is true
+                    String.valueOf(doMapAgg)));
+
+        // If doMapAgg is true, add the combiner even if it was disabled, since
+        // CombinerOptimizer actually adds the POPartialAgg plan. We'll remove
+        // the combine plan later.
+        if (!pc.inIllustrator && (doCombiner || doMapAgg))  {
             CombinerOptimizer co = new CombinerOptimizer(plan, doMapAgg);
             co.visit();
             //display the warning message(s) from the CombinerOptimizer
@@ -679,7 +688,7 @@ public class MapReduceLauncher extends Launcher {
             la.adjust();
         }
         // Optimize to use secondary sort key if possible
-        prop = pc.getProperties().getProperty(PigConfiguration.PIG_EXEC_NO_SECONDARY_KEY);
+        String prop = pc.getProperties().getProperty(PigConfiguration.PIG_EXEC_NO_SECONDARY_KEY);
         if (!pc.inIllustrator && !("true".equals(prop)))  {
             SecondaryKeyOptimizerMR skOptimizer = new SecondaryKeyOptimizerMR(plan);
             skOptimizer.visit();
@@ -688,6 +697,13 @@ public class MapReduceLauncher extends Launcher {
         // optimize key - value handling in package
         POPackageAnnotator pkgAnnotator = new POPackageAnnotator(plan);
         pkgAnnotator.visit();
+
+        // now we can remove the combiner plan if we don't really need it.
+        // note the combiner plan is needed by POPackageAnnotator
+        if (!doCombiner){
+            CombinerPlanRemover remover = new CombinerPlanRemover(plan);
+            remover.visit();
+        }
 
         // optimize joins
         LastInputStreamingOptimizer liso =
@@ -843,4 +859,3 @@ public class MapReduceLauncher extends Launcher {
     }
 
 }
-
