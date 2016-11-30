@@ -31,7 +31,7 @@
     <property file="${basedir}/build.properties" />
 
     <!-- name and version properties -->
-    <property name="name" value="pig" />
+    <property name="name" value="pig-ecm" />
     <property name="Name" value="Pig" />
     <property name="ant-task.version" value="2.0.10" />
     <property name="pig.pom" value="${basedir}/ivy/pig.pom" />
