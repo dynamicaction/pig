@@ -90,7 +90,7 @@ public abstract class Launcher {
     }
 
     protected Launcher() {
-        Runtime.getRuntime().addShutdownHook(new HangingJobKiller());
+//        Runtime.getRuntime().addShutdownHook(new HangingJobKiller);
         // handle the windows portion of \r
         if (System.getProperty("os.name").toUpperCase().startsWith("WINDOWS")) {
             newLine = "\r\n";
