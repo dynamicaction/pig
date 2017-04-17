@@ -1,0 +1,7 @@
+To build:
+
+Windows Subsystem for Linux (WSL):
+ant -Dhadoopversion=23 clean jar source-jar
+
+cmd:
+mvn install:install-file -Dfile=build/pig-ecm-0.16.0-SNAPSHOT.jar -Dsources=build/pig-ecm-0.16.0-SNAPSHOT-sources.jar -DartifactId=pig-ecm -DgroupId=org.apache.pig -Dversion=0.16.0-SNAPSHOT -Dpackaging=jar -DpomFile=pom.xml
