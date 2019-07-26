@@ -23,7 +23,9 @@ import java.io.PrintStream;
 import java.net.URI;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -60,6 +62,11 @@ public class TezPlanContainer extends OperatorPlan<TezPlanContainerNode> {
     // will use them for simplicity). This differs from MR Pig, where they are added to
     // the job jar.
     public Map<String, LocalResource> getLocalResources() throws Exception {
+        if (pigContext.getExecType().isLocal()) {
+            // Running locally, so no need to send jars
+            return Collections.emptyMap();
+        }
+        
         Set<URI> jarLists = new HashSet<URI>();
 
         for (String jarFile : JarManager.getDefaultJars()) {
@@ -110,6 +117,18 @@ public class TezPlanContainer extends OperatorPlan<TezPlanContainerNode> {
             jarLists.add(scriptUDFJarFile.toURI());
         }
 
+        // Exclude redeployed jars
+        for (Iterator<URI> iter = jarLists.iterator(); iter.hasNext();) {
+            URI jar = iter.next();
+            String jarName = new File(jar).getName();
+            for (String predeployedJar : pigContext.predeployedJars) {
+                if (predeployedJar.contains(jarName)) {
+                    iter.remove();
+                    break;
+                }
+            }
+        }
+        
         return TezResourceManager.getInstance().addTezResources(jarLists);
     }
 
