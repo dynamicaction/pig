@@ -102,8 +102,8 @@ public class MapReduceLauncher extends Launcher {
 
     public MapReduceLauncher() {
         super();
-        Utils.addShutdownHookWithPriority(new HangingJobKiller(),
-                PigImplConstants.SHUTDOWN_HOOK_JOB_KILL_PRIORITY);
+//        Utils.addShutdownHookWithPriority(new HangingJobKiller(),
+//                PigImplConstants.SHUTDOWN_HOOK_JOB_KILL_PRIORITY);
     }
 
     @Override
