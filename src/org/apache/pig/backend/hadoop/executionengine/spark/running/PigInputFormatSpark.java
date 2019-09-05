@@ -80,8 +80,25 @@ public class PigInputFormatSpark extends PigInputFormat {
      */
     @Override
     public List<InputSplit> getSplits(JobContext jobcontext) throws IOException, InterruptedException {
+        
+        // Track whether UDF conf is empty when we start. If it is, we clear out ThreadLocal context set by 
+        // super.getSplits() to ensure that it is still empty when we return. This is needed because getSplits() 
+        // is called from the dag-scheduler-event-loop thread, and SparkEngineConf.writeObject() assumes it won't exist
+        // in that thread.
+        boolean udfConfEmpty = UDFContext.getUDFContext().isUDFConfEmpty();
+        
         List<InputSplit> sparkPigSplits = new ArrayList<>();
-        List<InputSplit> originalSplits = super.getSplits(jobcontext);
+        List<InputSplit> originalSplits;
+        
+        try {
+            originalSplits = super.getSplits(jobcontext);
+        } finally {
+            if (udfConfEmpty) {
+                PigContext.setPackageImportList(null);
+                UDFContext.getUDFContext().addJobConf(null);
+                UDFContext.getUDFContext().reset();
+            }
+        }
 
         boolean isFileSplits = true;
         for (InputSplit inputSplit : originalSplits) {
@@ -116,8 +133,8 @@ public class PigInputFormatSpark extends PigInputFormat {
     }
 
     private void resetUDFContext() {
-		UDFContext.getUDFContext().reset();
-	}
+        UDFContext.getUDFContext().reset();
+    }
 
 
     static class SparkRecordReaderFactory extends PigInputFormat.RecordReaderFactory {
