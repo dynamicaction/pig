@@ -827,6 +827,11 @@
             <zipfileset src="${basedir}/_pig-shims.jar" includes="**/Spark2*.class"/>
         </jar>
         <delete file="${basedir}/_pig-shims.jar"/>
+    
+        <echo>Adding shaded RoaringBitmap classes to jar</echo>
+        <jar update="yes" jarfile="${output.jarfile.core}">
+            <zipfileset src="${ivy.lib.dir}/RoaringBitmap-shaded-${roaring-bitmap-shaded.version}.jar"/>
+        </jar>
     </target>
 
     <!-- ================================================================== -->
