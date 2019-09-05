@@ -34,10 +34,12 @@ import java.util.Map;
 public class POFRJoinSpark extends POFRJoin {
     private static final Log log = LogFactory.getLog(POFRJoinSpark.class);
 
+    private String [] broadcastVariableNames;
     private Map<String, List<Tuple>> broadcasts;
 
-    public POFRJoinSpark(POFRJoin copy) throws ExecException {
+    public POFRJoinSpark(POFRJoin copy, String [] broadcastVariableNames) throws ExecException {
         super(copy);
+        this.broadcastVariableNames = broadcastVariableNames;
     }
 
     @Override
@@ -68,7 +70,7 @@ public class POFRJoinSpark extends POFRJoin {
             TupleToMapKey replicate = new TupleToMapKey(1000, keySchemaTupleFactory);
 
             log.debug("Completed setup. Trying to build replication hash table");
-            List<Tuple> tuples = broadcasts.get(parentPlan.getPredecessors(this).get(i).getOperatorKey().toString());
+            List<Tuple> tuples = broadcasts.get(broadcastVariableNames[i]);
 
             POLocalRearrange localRearrange = LRs[i];
 

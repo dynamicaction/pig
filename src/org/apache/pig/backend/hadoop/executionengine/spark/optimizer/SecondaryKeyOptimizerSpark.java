@@ -25,6 +25,8 @@ import java.util.List;
 import org.apache.pig.backend.hadoop.executionengine.optimizer.SecondaryKeyOptimizer;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.PhysicalOperator;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhysicalPlan;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POBroadcastSpark;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POFRJoin;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POLocalRearrange;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.util.PlanHelper;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.POGlobalRearrangeSpark;
@@ -79,6 +81,13 @@ public class SecondaryKeyOptimizerSpark extends SparkOpPlanVisitor implements Se
          * change PODistinct to POSortedDistinct in the foreach in the reducePlan.
          */
         for (POLocalRearrange currentLR : rearranges) {
+            if (!isSupportedReducePlan(sparkOperator.physicalPlan, currentLR)) {
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Plan is not supported for optimization");
+                }
+                continue;
+            }
+
             PhysicalPlan mapPlan = null;
             PhysicalPlan reducePlan = null;
             try {
@@ -117,6 +126,37 @@ public class SecondaryKeyOptimizerSpark extends SparkOpPlanVisitor implements Se
                 numUseSecondaryKey += info.getNumUseSecondaryKey();
             }
         }
+    }
+
+    private boolean isSupportedReducePlan(PhysicalPlan physicalPlan, POLocalRearrange currentLR)  {
+        List<PhysicalOperator> succList = physicalPlan.getSuccessors(currentLR);
+        while (succList != null) {
+            if (succList.size() != 1) {
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("the size of successors of currentLR should be 1 but now it is not 1,physicalPlan:" + physicalPlan);
+                }
+                return false;
+            }
+            PhysicalOperator succ = succList.get(0);
+            if (succ instanceof POLocalRearrange) {
+                return true;
+            } 
+            if (succ instanceof POBroadcastSpark) {
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Current code does not enable secondarykey optimization when broadcast is encounted");
+                }
+                return false;
+            }
+            if (succ instanceof POFRJoin) {
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Current code does not enable secondarykey optimization when broadcast is encounted");
+                }
+                return false;
+            }
+            succList = physicalPlan.getSuccessors(succ);
+        }
+        
+        return true;
     }
 
     /**

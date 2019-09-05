@@ -745,20 +745,32 @@ public class SparkCompiler extends PhyPlanVisitor {
     public void visitFRJoin(POFRJoin op) throws VisitorException {
         try {
             curSparkOp = phyToSparkOpMap.get(op.getInputs().get(op.getFragment()));
-            for (int i = 0; i < compiledInputs.length; i++) {
-                SparkOperator sparkOperator = compiledInputs[i];
-                if (curSparkOp.equals(sparkOperator)) {
-                    continue;
+            
+            // Keep track of broadcasts we've added so we don't add duplicates
+            Map<OperatorKey,POBroadcastSpark> broadcastsByInputKey = new HashMap<>();
+            
+            // Keep track of the broadcast variable name corresponding to each input
+            String [] broadcastVariableNames = new String[op.getInputs().size()];
+            
+            for (int i = 0; i < op.getInputs().size(); i++) {
+                if (i == op.getFragment()) continue;
+                SparkOperator sparkInput = phyToSparkOpMap.get(op.getInputs().get(i));
+                
+                POBroadcastSpark poBroadcastSpark = broadcastsByInputKey.get(sparkInput.getOperatorKey());
+                
+                if (poBroadcastSpark == null) {
+                    OperatorKey broadcastKey = new OperatorKey(scope, nig.getNextNodeId(scope));
+                    poBroadcastSpark = new POBroadcastSpark(broadcastKey);
+                    poBroadcastSpark.setBroadcastedVariableName(broadcastKey.toString());
+                    broadcastsByInputKey.put(sparkInput.getOperatorKey(), poBroadcastSpark);
+                    
+                    sparkInput.physicalPlan.addAsLeaf(poBroadcastSpark);
                 }
-
-                OperatorKey broadcastKey = new OperatorKey(scope, nig.getNextNodeId(scope));
-                POBroadcastSpark poBroadcastSpark = new POBroadcastSpark(broadcastKey);
-                poBroadcastSpark.setBroadcastedVariableName(broadcastKey.toString());
-
-                sparkOperator.physicalPlan.addAsLeaf(poBroadcastSpark);
+                
+                broadcastVariableNames[i] = poBroadcastSpark.getBroadcastedVariableName();
             }
 
-            POFRJoinSpark poFRJoinSpark = new POFRJoinSpark(op);
+            POFRJoinSpark poFRJoinSpark = new POFRJoinSpark(op, broadcastVariableNames);
             addToPlan(poFRJoinSpark);
             phyToSparkOpMap.put(op, curSparkOp);
         } catch (Exception e) {

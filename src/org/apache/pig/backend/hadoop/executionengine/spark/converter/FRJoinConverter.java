@@ -49,7 +49,7 @@ public class FRJoinConverter implements
     public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
                               POFRJoin poFRJoin) throws IOException {
         SparkUtil.assertPredecessorSizeGreaterThan(predecessors, poFRJoin, 1);
-        RDD<Tuple> rdd = predecessors.get(0);
+        RDD<Tuple> rdd = predecessors.get(poFRJoin.getFragment());
 
         attachReplicatedInputs((POFRJoinSpark) poFRJoin);
 

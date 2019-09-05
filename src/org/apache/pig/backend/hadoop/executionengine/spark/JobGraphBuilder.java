@@ -45,6 +45,7 @@ import org.apache.pig.backend.hadoop.executionengine.physicalLayer.expressionOpe
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhyPlanVisitor;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhysicalPlan;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POBroadcastSpark;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POFRJoin;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POMergeJoin;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POPoissonSample;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSkewedJoin;
@@ -315,7 +316,7 @@ public class JobGraphBuilder extends SparkOpPlanVisitor {
         List preds = null;
         if (!(op instanceof POJoinGroupSpark)) {
             preds = plan.getPredecessors(op);
-            if (preds != null && preds.size() > 1 && !(op instanceof POSkewedJoin)) {
+            if (preds != null && preds.size() > 1 && !(op instanceof POSkewedJoin) && !(op instanceof POFRJoin)) {
                 Collections.sort(preds);
             }
         } else {
