@@ -659,10 +659,10 @@ public class MapReduceLauncher extends Launcher {
                         "last.input.chunksize", JoinPackager.DEFAULT_CHUNK_SIZE);
 
         boolean doMapAgg =
-            Boolean.valueOf(pc.getProperties().getProperty(PigConfiguration.PROP_EXEC_MAP_PARTAGG,"false"));
+            Boolean.valueOf(pc.getProperties().getProperty(PigConfiguration.PIG_EXEC_MAP_PARTAGG,"false"));
 
         boolean doCombiner =
-            !Boolean.valueOf(pc.getProperties().getProperty(PigConfiguration.PROP_NO_COMBINER,
+            !Boolean.valueOf(pc.getProperties().getProperty(PigConfiguration.PIG_EXEC_NO_COMBINER,
                     // Default to no combiner when doMapAgg is true
                     String.valueOf(doMapAgg)));
 
