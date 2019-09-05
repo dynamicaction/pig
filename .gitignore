@@ -6,8 +6,8 @@ target/
 ivy/*.jar
 lib/*.jar
 lib/spark/*.jar
-lib/h1/*.jar
 lib/h2/*.jar
+lib/hadoop2-runtime/*.jar
 .eclipse.templates/*
 .settings/*
 pig.jar
@@ -29,4 +29,5 @@ contrib/piggybank/java/piggybank.jar
 conf/log4j.properties
 lib/jdiff/pig_*SNAPSHOT.xml
 test/resources/*.jar
+dependency-reduced-pom.xml
 !ivy/ant-contrib-1.0b3.jar
