@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -430,6 +431,11 @@ public class SparkLauncher extends Launcher {
 
 
     private void addJarsToSparkJob(SparkOperPlan sparkPlan) throws IOException {
+        if (pigContext.getExecType().isLocal()) {
+            // Running locally, so no need to send jars
+            return;
+        }
+        
         Set<String> allJars = new HashSet<String>();
         LOG.info("Add default jars to Spark Job");
         allJars.addAll(JarManager.getDefaultJars());
@@ -458,6 +464,20 @@ public class SparkLauncher extends Launcher {
             allJars.add(extraJarUrl.getFile());
         }
 
+        // Exclude redeployed jars
+        LOG.info("Exclude predeployed jars from Spark job");
+        for (Iterator<String> iter = allJars.iterator(); iter.hasNext();) {
+            File jarFile = new File(iter.next());
+            String jarName = jarFile.getName();
+            for (String predeployedJar : pigContext.predeployedJars) {
+                if (predeployedJar.contains(jarName)) {
+                    LOG.info("Excluding predeployed jar: " + jarFile);
+                    iter.remove();
+                    break;
+                }
+            }
+        }
+        
         //Upload all jars to spark working directory
         for (String jar : allJars) {
             File jarFile = new File(jar);
