@@ -66,12 +66,12 @@ public abstract class SparkJobStats extends JobStats {
     }
 
     public void addOutputInfo(POStore poStore, boolean success,
-                              JobStatisticCollector jobStatisticCollector) {
+                              JobStatisticCollector jobStatisticCollector, SparkCounters sparkCounters) {
         if (!poStore.isTmpStore()) {
             long bytes = getOutputSize(poStore, conf);
             long recordsCount = -1;
             if (disableCounter == false) {
-                recordsCount = SparkStatsUtil.getRecordCount(poStore);
+                recordsCount = SparkStatsUtil.getRecordCount(poStore, sparkCounters);
             }
             OutputStats outputStats = new OutputStats(poStore.getSFile().getFileName(),
                     bytes, recordsCount, success);
@@ -83,11 +83,11 @@ public abstract class SparkJobStats extends JobStats {
     }
 
     public void addInputStats(POLoad po, boolean success,
-                              boolean singleInput) {
+                              boolean singleInput, SparkCounters sparkCounters) {
 
         long recordsCount = -1;
         if (disableCounter == false) {
-            recordsCount = SparkStatsUtil.getRecordCount(po);
+            recordsCount = SparkStatsUtil.getRecordCount(po, sparkCounters);
         }
         long bytesRead = -1;
         if (singleInput && stats.get("BytesRead") != null) {
@@ -241,8 +241,7 @@ public abstract class SparkJobStats extends JobStats {
         return warningCounters;
     }
 
-    public void initWarningCounters() {
-        SparkCounters counters = SparkPigStatusReporter.getInstance().getCounters();
+    public void initWarningCounters(SparkCounters counters) {
         SparkCounterGroup<Map<String, Long>> sparkCounterGroup = counters.getSparkCounterGroups().get(
                 PigWarning.class.getCanonicalName());
         if (sparkCounterGroup != null) {

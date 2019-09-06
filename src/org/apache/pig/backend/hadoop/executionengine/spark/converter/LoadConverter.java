@@ -25,10 +25,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-import scala.Function1;
-import scala.Tuple2;
-import scala.runtime.AbstractFunction1;
-
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -49,18 +45,20 @@ import org.apache.pig.backend.hadoop.executionengine.spark.SparkUtil;
 import org.apache.pig.backend.hadoop.executionengine.spark.running.PigInputFormatSpark;
 import org.apache.pig.data.Tuple;
 import org.apache.pig.impl.PigContext;
-import org.apache.pig.impl.io.FileSpec;
 import org.apache.pig.impl.plan.OperatorKey;
 import org.apache.pig.impl.util.ObjectSerializer;
 import org.apache.pig.impl.util.UDFContext;
 import org.apache.pig.tools.pigstats.spark.SparkCounters;
-import org.apache.pig.tools.pigstats.spark.SparkPigStatusReporter;
 import org.apache.pig.tools.pigstats.spark.SparkStatsUtil;
 import org.apache.spark.SparkContext;
 import org.apache.spark.TaskContext;
 import org.apache.spark.rdd.RDD;
 
 import com.google.common.collect.Lists;
+
+import scala.Function1;
+import scala.Tuple2;
+import scala.runtime.AbstractFunction1;
 
 /**
  * Converter that loads data via POLoad and converts it to RRD&lt;Tuple>. Abuses
@@ -76,14 +74,17 @@ public class LoadConverter implements RDDConverter<Tuple, Tuple, POLoad> {
     private SparkContext sparkContext;
     private JobConf jobConf;
     private SparkEngineConf sparkEngineConf;
+    private SparkCounters counters;
 
     public LoadConverter(PigContext pigContext, PhysicalPlan physicalPlan,
-            SparkContext sparkContext, JobConf jobConf, SparkEngineConf sparkEngineConf) {
+            SparkContext sparkContext, JobConf jobConf, SparkEngineConf sparkEngineConf,
+            SparkCounters counters) {
         this.pigContext = pigContext;
         this.physicalPlan = physicalPlan;
         this.sparkContext = sparkContext;
         this.jobConf = jobConf;
         this.sparkEngineConf = sparkEngineConf;
+        this.counters = counters;
     }
 
     @Override
@@ -120,9 +121,8 @@ public class LoadConverter implements RDDConverter<Tuple, Tuple, POLoad> {
         boolean disableCounter = jobConf.getBoolean("pig.disable.counter", false);
         if (!op.isTmpLoad() && !disableCounter) {
             String counterName = SparkStatsUtil.getCounterName(op);
-            SparkPigStatusReporter counterReporter = SparkPigStatusReporter.getInstance();
-            if (counterReporter.getCounters() != null) {
-                counterReporter.getCounters().createCounter(
+            if (counters != null) {
+                counters.createCounter(
                         SparkStatsUtil.SPARK_INPUT_COUNTER_GROUP,
                         counterName);
             }
@@ -130,7 +130,7 @@ public class LoadConverter implements RDDConverter<Tuple, Tuple, POLoad> {
             ttf.setDisableCounter(disableCounter);
             ttf.setCounterGroupName(SparkStatsUtil.SPARK_INPUT_COUNTER_GROUP);
             ttf.setCounterName(counterName);
-            ttf.setSparkCounters(SparkPigStatusReporter.getInstance().getCounters());
+            ttf.setSparkCounters(counters);
         }
 
         // map to get just RDD<Tuple>

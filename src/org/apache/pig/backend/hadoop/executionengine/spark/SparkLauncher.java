@@ -17,6 +17,8 @@
  */
 package org.apache.pig.backend.hadoop.executionengine.spark;
 
+import static org.apache.pig.backend.hadoop.executionengine.spark.SparkShims.SPARK_VERSION;
+
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -33,6 +35,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
+
 import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.transform.TransformerException;
 
@@ -135,14 +138,11 @@ import org.apache.pig.tools.pigstats.PigStats;
 import org.apache.pig.tools.pigstats.spark.SparkCounterGroup;
 import org.apache.pig.tools.pigstats.spark.SparkCounters;
 import org.apache.pig.tools.pigstats.spark.SparkPigStats;
-import org.apache.pig.tools.pigstats.spark.SparkPigStatusReporter;
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.scheduler.StatsReportListener;
 
 import com.google.common.base.Joiner;
-
-import static org.apache.pig.backend.hadoop.executionengine.spark.SparkShims.SPARK_VERSION;
 
 /**
  * Main class that launches pig for Spark
@@ -196,14 +196,15 @@ public class SparkLauncher extends Launcher {
 
         new ParallelismSetter(sparkplan, jobConf).visit();
 
-        prepareSparkCounters(jobConf);
+        SparkCounters counters = prepareSparkCounters(jobConf);
+        sparkStats.setSparkCounters(counters);
 
         // Create conversion map, mapping between pig operator and spark convertor
         Map<Class<? extends PhysicalOperator>, RDDConverter> convertMap
                 = new HashMap<Class<? extends PhysicalOperator>, RDDConverter>();
         convertMap.put(POLoad.class, new LoadConverter(pigContext,
-                physicalPlan, sparkContext.sc(), jobConf, sparkEngineConf));
-        convertMap.put(POStore.class, new StoreConverter(jobConf));
+                physicalPlan, sparkContext.sc(), jobConf, sparkEngineConf, counters));
+        convertMap.put(POStore.class, new StoreConverter(jobConf, counters));
         convertMap.put(POForEach.class, new ForEachConverter(jobConf));
         convertMap.put(POFilter.class, new FilterConverter());
         convertMap.put(POPackage.class, new PackageConverter());
@@ -761,8 +762,7 @@ public class SparkLauncher extends Launcher {
      * @param jobConf
      * @throws IOException
      */
-    private static void prepareSparkCounters(JobConf jobConf) throws IOException {
-        SparkPigStatusReporter statusReporter = SparkPigStatusReporter.getInstance();
+    private static SparkCounters prepareSparkCounters(JobConf jobConf) throws IOException {
         SparkCounters counters = new SparkCounters(sparkContext);
 
         if ("true".equalsIgnoreCase(jobConf.get("aggregate.warning"))) {
@@ -773,7 +773,17 @@ public class SparkLauncher extends Launcher {
             pigWarningGroup.createCounter(PigWarning.SPARK_CUSTOM_WARN.name(), new HashMap<String,Long>());
             counters.getSparkCounterGroups().put(PIG_WARNING_FQCN, pigWarningGroup);
         }
-        statusReporter.setCounters(counters);
+
+        String [] userCounters = jobConf.getStrings("pig.spark.user_counters");
+        if (userCounters != null) {
+            for (String c : userCounters) {
+                String [] parts = c.split(":", 2);
+                counters.createCounter(parts[0], parts[1]);
+            }
+        }
+
         jobConf.set("pig.spark.counters", ObjectSerializer.serialize(counters));
+        
+        return counters;
     }
 }

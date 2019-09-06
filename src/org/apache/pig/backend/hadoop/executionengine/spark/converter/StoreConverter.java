@@ -21,11 +21,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.apache.pig.tools.pigstats.spark.SparkCounters;
-import org.apache.pig.tools.pigstats.spark.SparkPigStatusReporter;
-import org.apache.pig.tools.pigstats.spark.SparkStatsUtil;
-import scala.Tuple2;
-
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.Path;
@@ -43,12 +38,16 @@ import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOpe
 import org.apache.pig.backend.hadoop.executionengine.spark.SparkUtil;
 import org.apache.pig.data.Tuple;
 import org.apache.pig.impl.util.ObjectSerializer;
+import org.apache.pig.tools.pigstats.spark.SparkCounters;
+import org.apache.pig.tools.pigstats.spark.SparkStatsUtil;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.rdd.PairRDDFunctions;
 import org.apache.spark.rdd.RDD;
 
 import com.google.common.collect.Lists;
+
+import scala.Tuple2;
 
 /**
  * Converter that takes a POStore and stores it's content.
@@ -60,8 +59,11 @@ public class StoreConverter implements
     private static final Log LOG = LogFactory.getLog(StoreConverter.class);
 
     private JobConf jobConf = null;
-    public StoreConverter(JobConf jobConf) {
+    private SparkCounters counters = null;
+
+    public StoreConverter(JobConf jobConf, SparkCounters counters) {
         this.jobConf = jobConf;
+        this.counters = counters;
     }
 
     @Override
@@ -70,8 +72,10 @@ public class StoreConverter implements
         SparkUtil.assertPredecessorSize(predecessors, op, 1);
         RDD<Tuple> rdd = predecessors.get(0);
 
-        SparkPigStatusReporter.getInstance().createCounter(SparkStatsUtil.SPARK_STORE_COUNTER_GROUP,
+        if (counters != null) {
+            counters .createCounter(SparkStatsUtil.SPARK_STORE_COUNTER_GROUP,
                 SparkStatsUtil.getCounterName(op));
+        }
 
         // convert back to KV pairs
         JavaRDD<Tuple2<Text, Tuple>> rddPairs = rdd.toJavaRDD().map(
@@ -167,8 +171,7 @@ public class StoreConverter implements
             ftf.setDisableCounter(disableCounter);
             ftf.setCounterGroupName(SparkStatsUtil.SPARK_STORE_COUNTER_GROUP);
             ftf.setCounterName(SparkStatsUtil.getCounterName(op));
-            SparkPigStatusReporter counterReporter = SparkPigStatusReporter.getInstance();
-            ftf.setSparkCounters(counterReporter.getCounters());
+            ftf.setSparkCounters(counters);
         }
         return ftf;
     }

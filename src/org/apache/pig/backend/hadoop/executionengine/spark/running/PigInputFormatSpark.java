@@ -44,7 +44,9 @@ import org.apache.pig.impl.PigContext;
 import org.apache.pig.impl.PigImplConstants;
 import org.apache.pig.impl.util.ObjectSerializer;
 import org.apache.pig.impl.util.UDFContext;
+import org.apache.pig.tools.pigstats.PigStatusReporter;
 import org.apache.pig.tools.pigstats.spark.SparkCounters;
+import org.apache.pig.tools.pigstats.spark.SparkTaskContext;
 
 public class PigInputFormatSpark extends PigInputFormat {
 
@@ -126,9 +128,12 @@ public class PigInputFormatSpark extends PigInputFormat {
         PigContext pc = (PigContext) ObjectSerializer.deserialize(jobConf.get("pig.pigContext"));
         SchemaTupleBackend.initialize(jobConf, pc);
         PigMapReduce.sJobConfInternal.set(jobConf);
+        SparkCounters counters = (SparkCounters)ObjectSerializer.deserialize(jobConf.get("pig.spark.counters"));
+        PigStatusReporter reporter = PigStatusReporter.getInstance();
+        reporter.setContext(new SparkTaskContext(counters));
         PigHadoopLogger pigHadoopLogger = PigHadoopLogger.getInstance();
         pigHadoopLogger.setAggregate("true".equalsIgnoreCase(jobConf.get("aggregate.warning")));
-        pigHadoopLogger.setReporter((SparkCounters)ObjectSerializer.deserialize(jobConf.get("pig.spark.counters")));
+        pigHadoopLogger.setReporter(counters); // Using counters as reporter here for custom warn handling
         PhysicalOperator.setPigLogger(pigHadoopLogger);
     }
 

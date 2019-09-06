@@ -57,6 +57,8 @@ public class SparkPigStats extends PigStats {
 
     private Configuration conf;
 
+    private SparkCounters sparkCounters;
+
     public SparkPigStats() {
         jobPlan = new JobGraph();
         this.sparkScriptState = (SparkScriptState) ScriptState.get();
@@ -76,9 +78,9 @@ public class SparkPigStats extends PigStats {
         SparkJobStats jobStats = SparkShims.getInstance().sparkJobStats(jobId, jobPlan, conf);
         jobStats.setSuccessful(isSuccess);
         jobStats.collectStats(jobStatisticCollector);
-        jobStats.addOutputInfo(poStore, isSuccess, jobStatisticCollector);
+        jobStats.addOutputInfo(poStore, isSuccess, jobStatisticCollector, sparkCounters);
         addInputInfoForSparkOper(sparkOperator, jobStats, isSuccess, jobStatisticCollector, conf);
-        jobStats.initWarningCounters();
+        jobStats.initWarningCounters(sparkCounters);
         jobSparkOperatorMap.put(jobStats, sparkOperator);
 
         jobPlan.add(jobStats);
@@ -87,13 +89,13 @@ public class SparkPigStats extends PigStats {
 
     public void addFailJobStats(POStore poStore, SparkOperator sparkOperator, String jobId,
                                 JobStatisticCollector jobStatisticCollector,
-                                JavaSparkContext sparkContext,
+                                JavaSparkContext sparkContext, 
                                 Exception e) {
         boolean isSuccess = false;
         SparkJobStats jobStats = SparkShims.getInstance().sparkJobStats(jobId, jobPlan, conf);
         jobStats.setSuccessful(isSuccess);
         jobStats.collectStats(jobStatisticCollector);
-        jobStats.addOutputInfo(poStore, isSuccess, jobStatisticCollector);
+        jobStats.addOutputInfo(poStore, isSuccess, jobStatisticCollector, sparkCounters);
         addInputInfoForSparkOper(sparkOperator, jobStats, isSuccess, jobStatisticCollector, conf);
         jobSparkOperatorMap.put(jobStats, sparkOperator);
         jobPlan.add(jobStats);
@@ -106,6 +108,10 @@ public class SparkPigStats extends PigStats {
         jobSparkOperatorMap.put(jobStats, sparkOperator);
         jobPlan.add(jobStats);
         jobStats.setBackendException(e);
+    }
+    
+    public void setSparkCounters(SparkCounters sparkCounters) {
+        this.sparkCounters = sparkCounters;
     }
 
     public void finish() {
@@ -214,6 +220,10 @@ public class SparkPigStats extends PigStats {
         return jobPlan.size();
     }
 
+    public SparkCounters getSparkCounters() {
+        return sparkCounters;
+    }
+
     /**
      * SparkPlan can have many SparkOperators.
      * Each SparkOperator can have multiple POStores
@@ -241,7 +251,7 @@ public class SparkPigStats extends PigStats {
             List<POLoad> poLoads = PlanHelper.getPhysicalOperators(sparkOperator.physicalPlan, POLoad.class);
             for (POLoad load : poLoads) {
                 if (!load.isTmpLoad()) {
-                    jobStats.addInputStats(load, isSuccess, (poLoads.size() == 1));
+                    jobStats.addInputStats(load, isSuccess, (poLoads.size() == 1), sparkCounters);
                 }
             }
         } catch (VisitorException ve) {

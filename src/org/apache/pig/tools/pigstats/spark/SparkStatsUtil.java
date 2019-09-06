@@ -92,9 +92,8 @@ public class SparkStatsUtil {
         return sb.toString();
     }
 
-    public static long getRecordCount(POStore store) {
-        SparkPigStatusReporter reporter = SparkPigStatusReporter.getInstance();
-        Object value = reporter.getCounters().getValue(SPARK_STORE_COUNTER_GROUP, getCounterName(store));
+    public static long getRecordCount(POStore store, SparkCounters counters) {
+        Object value = counters.getValue(SPARK_STORE_COUNTER_GROUP, getCounterName(store));
         if (value == null) {
             return 0L;
         } else {
@@ -102,10 +101,9 @@ public class SparkStatsUtil {
         }
     }
 
-    public static long getRecordCount(POLoad load) {
-        SparkPigStatusReporter reporter = SparkPigStatusReporter.getInstance();
+    public static long getRecordCount(POLoad load, SparkCounters counters) {
         int loadersCount = countCoLoadsIfInSplit(load,load.getParentPlan());
-        Object value = reporter.getCounters().getValue(SPARK_INPUT_COUNTER_GROUP, getCounterName(load));
+        Object value = counters.getValue(SPARK_INPUT_COUNTER_GROUP, getCounterName(load));
         if (value == null) {
             return 0L;
         } else {
