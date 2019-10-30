@@ -28,6 +28,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.mapred.JobClient;
+import org.apache.pig.PigCounters;
 import org.apache.pig.PigWarning;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POLoad;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStore;
@@ -139,13 +140,26 @@ public class SparkPigStats extends PigStats {
                 continue;
             }
             for (String warnKey : warningCounters.keySet()) {
-                Long val = warningAggMap.get(warnKey);
+                Enum key;
+                try {
+                    key = PigWarning.valueOf(warnKey);
+                } catch (IllegalArgumentException e) {
+                    try {
+                        key = PigCounters.valueOf(warnKey);
+                    } catch (IllegalArgumentException e2) {
+                        // Unsupported warning
+                        LOG.warn("Unmatched warnKey: " + warnKey);
+                        continue;
+                    }
+                }
+                
+                Long val = warningAggMap.get(key);
                 if (val != null) {
                     val += (Long)warningCounters.get(warnKey);
                 } else {
                     val = (Long)warningCounters.get(warnKey);
                 }
-                warningAggMap.put(PigWarning.valueOf(warnKey), val);
+                warningAggMap.put(key, val);
             }
         }
         CompilationMessageCollector.logAggregate(warningAggMap, CompilationMessageCollector.MessageType.Warning, LOG);
