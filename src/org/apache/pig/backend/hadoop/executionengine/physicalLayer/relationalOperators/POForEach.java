@@ -719,15 +719,24 @@ public class POForEach extends PhysicalOperator {
             }
         }
 
-        POForEach clone = new POForEach(new OperatorKey(mKey.scope,
-                NodeIdGenerator.getGenerator().getNextNodeId(mKey.scope)),
-                requestedParallelism, plans, flattens);
+        POForEach clone = constructForClone(new OperatorKey(mKey.scope,
+                NodeIdGenerator.getGenerator().getNextNodeId(mKey.scope)), noItems, plans, flattens);
+        cloneValues(clone);
+
+        return clone;
+    }
+
+    protected POForEach constructForClone(OperatorKey operatorKey, int requestedParallelism,
+            List<PhysicalPlan> plans, List<Boolean> flattens)  throws CloneNotSupportedException {
+        return new POForEach(operatorKey, requestedParallelism, plans, flattens);
+    }
+    
+    protected void cloneValues(POForEach clone) {
         clone.setResultType(getResultType());
         clone.addOriginalLocation(alias, getOriginalLocations());
         clone.endOfAllInputProcessing = endOfAllInputProcessing;
         clone.mapSideOnly = mapSideOnly;
         clone.flattenNumFields = flattenNumFields;
-        return clone;
     }
 
     public boolean inProcessing()

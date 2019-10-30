@@ -17,6 +17,7 @@
  */
 package org.apache.pig.backend.hadoop.executionengine.spark.operator;
 
+import java.util.Arrays;
 import java.util.List;
 
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhysicalPlan;
@@ -101,5 +102,20 @@ public class POReduceBySpark extends POForEach {
     public POLocalRearrange getLROp() {
         return lr;
     }
-
+    
+    @Override
+    protected POReduceBySpark constructForClone(OperatorKey operatorKey, int requestedParallelism, List<PhysicalPlan> plans,
+            List<Boolean> flattens) throws CloneNotSupportedException {
+        return new POReduceBySpark(operatorKey, requestedParallelism, plans, flattens, pkg.clone(), lr.clone());
+    }
+    
+    @Override
+    protected void cloneValues(POForEach clone) {
+        super.cloneValues(clone);
+        POReduceBySpark c = (POReduceBySpark) clone;
+        c.customPartitioner = customPartitioner;
+        c.useSecondaryKey = useSecondaryKey;
+        c.secondarySortOrder = secondarySortOrder == null ? null : 
+                Arrays.copyOf(secondarySortOrder, secondarySortOrder.length);
+    }
 }
