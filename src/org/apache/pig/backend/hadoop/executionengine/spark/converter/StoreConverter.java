@@ -36,6 +36,7 @@ import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.PigOutputFor
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.PhysicalOperator;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStore;
 import org.apache.pig.backend.hadoop.executionengine.spark.SparkUtil;
+import org.apache.pig.backend.hadoop.executionengine.spark.running.PigOutputFormatSpark;
 import org.apache.pig.data.Tuple;
 import org.apache.pig.impl.util.ObjectSerializer;
 import org.apache.pig.tools.pigstats.spark.SparkCounters;
@@ -102,7 +103,7 @@ public class StoreConverter implements
         } else {
             pairRDDFunctions.saveAsNewAPIHadoopFile(poStore.getSFile()
                     .getFileName(), Text.class, Tuple.class,
-                    PigOutputFormat.class, jobConf);
+                    PigOutputFormatSpark.class, jobConf);
         }
 
         RDD<Tuple2<Text, Tuple>> retRdd = rddPairs.rdd();

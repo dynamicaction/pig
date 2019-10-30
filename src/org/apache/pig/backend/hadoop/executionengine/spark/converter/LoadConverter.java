@@ -43,6 +43,7 @@ import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOpe
 import org.apache.pig.backend.hadoop.executionengine.spark.SparkEngineConf;
 import org.apache.pig.backend.hadoop.executionengine.spark.SparkUtil;
 import org.apache.pig.backend.hadoop.executionengine.spark.running.PigInputFormatSpark;
+import org.apache.pig.backend.hadoop.executionengine.util.MapRedUtil;
 import org.apache.pig.data.Tuple;
 import org.apache.pig.impl.PigContext;
 import org.apache.pig.impl.plan.OperatorKey;
@@ -90,6 +91,9 @@ public class LoadConverter implements RDDConverter<Tuple, Tuple, POLoad> {
     @Override
     public RDD<Tuple> convert(List<RDD<Tuple>> predecessorRdds, POLoad op)
             throws IOException {
+        
+        MapRedUtil.setupUDFContext(jobConf);
+        
         configureLoader(physicalPlan, op, jobConf);
 
         // Set the input directory for input formats that are backed by a

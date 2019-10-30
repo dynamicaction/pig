@@ -52,6 +52,7 @@ import org.apache.pig.impl.plan.NodeIdGenerator;
 import org.apache.pig.impl.plan.OperatorKey;
 import org.apache.pig.impl.plan.PlanException;
 import org.apache.pig.impl.util.ObjectSerializer;
+import org.apache.pig.impl.util.UDFContext;
 import org.apache.spark.HashPartitioner;
 import org.apache.spark.Partitioner;
 import org.apache.spark.broadcast.Broadcast;
@@ -86,6 +87,8 @@ public class SparkUtil {
         // but we still need store it in jobConf because it will be used in PigOutputFormat#setupUdfEnvAndStores
         jobConf.set("udf.import.list",
                 ObjectSerializer.serialize(PigContext.getPackageImportList()));
+
+        UDFContext.getUDFContext().serialize(jobConf);
 
         Random rand = new Random();
         jobConf.set(MRConfiguration.JOB_APPLICATION_ATTEMPT_ID, Integer.toString(rand.nextInt()));
