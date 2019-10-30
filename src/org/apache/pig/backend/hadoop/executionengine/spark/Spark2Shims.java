@@ -155,7 +155,7 @@ public class Spark2Shims extends SparkShims {
         @Override
         public synchronized void onJobEnd(SparkListenerJobEnd jobEnd) {
             finishedJobIds.add(jobEnd.jobId());
-            notify();
+            notifyAll();
         }
     }
 

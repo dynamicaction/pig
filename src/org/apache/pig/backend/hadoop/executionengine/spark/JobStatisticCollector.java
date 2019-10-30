@@ -21,6 +21,8 @@ package org.apache.pig.backend.hadoop.executionengine.spark;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.spark.executor.TaskMetrics;
 import org.apache.spark.scheduler.SparkListener;
 
@@ -30,6 +32,7 @@ import java.util.Map;
 import java.util.Set;
 
 public class JobStatisticCollector {
+    private static final Log LOG = LogFactory.getLog(JobStatisticCollector.class);
 
     private final Map<Integer, int[]> jobIdToStageId = Maps.newHashMap();
     private final Map<Integer, Integer> stageIdToJobId = Maps.newHashMap();
@@ -55,9 +58,11 @@ public class JobStatisticCollector {
     public void waitForJobToEnd(int jobId) throws InterruptedException {
         synchronized (sparkListener) {
             while (!finishedJobIds.contains(jobId)) {
+                LOG.debug("Checking finished for " + jobId + ": " + finishedJobIds);
                 sparkListener.wait();
             }
 
+            LOG.debug("Removing finished job " + jobId);
             finishedJobIds.remove(jobId);
         }
     }
@@ -73,15 +78,6 @@ public class JobStatisticCollector {
                     iterator.remove();
                 }
             }
-        }
-    }
-
-    public void reset() {
-        synchronized (sparkListener) {
-            stageIdToJobId.clear();
-            jobIdToStageId.clear();
-            allJobStatistics.clear();
-            finishedJobIds.clear();
         }
     }
 }

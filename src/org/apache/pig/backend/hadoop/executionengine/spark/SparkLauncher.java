@@ -188,7 +188,6 @@ public class SparkLauncher extends Launcher {
 
         sparkContext.setJobGroup(jobGroupID, "Pig query to Spark cluster",
                 false);
-        jobStatisticCollector.reset();
 
         this.currentDirectoryPath = Paths.get(".").toAbsolutePath()
                 .normalize().toString()
