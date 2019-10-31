@@ -31,6 +31,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.pig.backend.executionengine.ExecException;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.Result;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POBroadcastSpark;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POFRJoin;
 import org.apache.pig.backend.hadoop.executionengine.spark.FlatMapFunctionAdapter;
 import org.apache.pig.backend.hadoop.executionengine.spark.SparkPigContext;
@@ -49,8 +50,18 @@ public class FRJoinConverter implements
     public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
                               POFRJoin poFRJoin) throws IOException {
         SparkUtil.assertPredecessorSizeGreaterThan(predecessors, poFRJoin, 1);
-        RDD<Tuple> rdd = predecessors.get(poFRJoin.getFragment());
-
+        
+        // Predecessors & inputs may have been rearranged, so we have to look up the
+        // main input (fragment) based on type
+        RDD<Tuple> rdd = null;
+        for (int i = 0; i < poFRJoin.getInputs().size(); i++) {
+            if (!(poFRJoin.getInputs().get(i) instanceof POBroadcastSpark)) {
+                rdd = predecessors.get(i); 
+            }
+        }
+        
+        if (rdd == null) throw new RuntimeException("No non-broadcast input found");
+        
         attachReplicatedInputs((POFRJoinSpark) poFRJoin);
 
         FRJoinFunction frJoinFunction = new FRJoinFunction(poFRJoin);
