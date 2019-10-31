@@ -41,6 +41,7 @@ import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MRConfigurat
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.PhyPlanSetter;
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.UDFFinishVisitor;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.PhysicalOperator;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.PhysicalOperator.OriginalLocation;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.expressionOperators.ConstantExpression;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhyPlanVisitor;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhysicalPlan;
@@ -69,8 +70,10 @@ import org.apache.pig.impl.plan.OperatorKey;
 import org.apache.pig.impl.plan.VisitorException;
 import org.apache.pig.tools.pigstats.spark.SparkPigStats;
 import org.apache.pig.tools.pigstats.spark.SparkStatsUtil;
+import org.apache.spark.SparkContext;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.rdd.RDD;
+import org.apache.spark.util.CallSite;
 
 import com.google.common.collect.Lists;
 
@@ -290,7 +293,23 @@ public class JobGraphBuilder extends SparkOpPlanVisitor {
                 skewedJoinConverter.setSkewedJoinPartitionFile(sparkOperator.getSkewedJoinPartitionFile());
             }
             adjustRuntimeParallelismForSkewedJoin(physicalOperator, sparkOperator, allPredRDDs);
-            nextRDD = converter.convert(allPredRDDs, physicalOperator);
+
+            StringBuilder sb = new StringBuilder();
+            for (OriginalLocation l : physicalOperator.getOriginalLocations()) {
+                if (sb.length() > 0) sb.append(", ");
+                sb.append(l);
+            }
+            if (sb.length() > 0) sb.append(" ");
+            sb.append("<" + physicalOperator.getOperatorKey() + ">");
+            sb.append(" (via " + converter.getClass().getSimpleName() + ")");
+            String callSite = sb.toString();
+            
+            try {
+                sparkContext.setCallSite(callSite);
+                nextRDD = converter.convert(allPredRDDs, physicalOperator);
+            } finally {
+                sparkContext.clearCallSite();
+            }
 
             if (nextRDD == null) {
                 throw new IllegalArgumentException(
